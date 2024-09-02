@@ -1,0 +1,45 @@
+<?xml version="1.0" encoding="utf-8"?>
+<launch>
+    <node name="object_detection_node" pkg="object_detection" type="object_detection_node" output="screen">
+	
+        <!-- Message Topic -->
+        <param name="lidar_topic" value="/velodyne_points"/>
+        <param name="camera_topic" value="/image_jpeg/raw"/>
+        <param name="yolo_topic" value="/yolov8_pub"/>
+        <param name="frame_name" value="velodyne"/>
+        
+        <!-- ROI Filtering Range -->
+        <param name="xMinRange" value="0"/> 
+        <param name="xMaxRange" value="20"/>
+        <param name="yMinRange" value="-6"/>
+        <param name="yMaxRange" value="6"/>
+        <param name="zMinRange" value="-2.0"/>
+        <param name="zMaxRange" value="4.0"/>
+
+        <!-- Cluster Parameter -->
+        <param name="cluster_tolerance" value="1.0"/> 
+        <param name="cluster_min" value="2"/>
+        <param name="cluster_max" value="100"/>
+
+        <!-- Ground Filtering Visualization -->
+        <param name="point_height" value="-0.5"/>
+
+        <!-- Kalman Filter -->
+        <param name="dt" value="1"/>
+        <param name="p1" value="1"/>
+        <param name="p2" value="1"/>
+        <param name="q1" value="0.01"/>
+        <param name="q2" value="0.01"/>
+        <param name="r" value="1"/>
+
+        <!-- Velocity Estimation -->
+        <param name="max_vel" value="20"/>
+        <param name="min_vel" value="-5"/>
+    </node>
+
+    <arg name="open_rviz1" default="true"/>
+    <group if="$(arg open_rviz1)">
+        <node pkg="rviz" type="rviz" name="rviz" required="true"
+              args="-d $(find object_detection)/rviz/view.rviz"/>
+    </group>
+</launch>
