@@ -1,6 +1,6 @@
 #include <detection.h>
 
-Object_Detection::Object_Detection(ros::NodeHandle* nodeHandle) : counter(0), prev_vel(0), bbox_width(10), dist_thresh(2.0){
+Object_Detection::Object_Detection(ros::NodeHandle* nodeHandle) : counter(0), bbox_width(10), dist_thresh(2.0){
     ROS_INFO("Start Detection");
     nh = *nodeHandle;  
     
@@ -12,6 +12,7 @@ Object_Detection::Object_Detection(ros::NodeHandle* nodeHandle) : counter(0), pr
     cloud_centeroid = nh.advertise<sensor_msgs::PointCloud2>("/cloud_centeroid", 1); 
     tracking_id = nh.advertise<visualization_msgs::MarkerArray>("/tracking_id", 1);
     tracking_vel = nh.advertise<std_msgs::Int32>("/tracking_vel", 1);
+    tracking_info = nh.advertise<std_msgs::String>("/tracking_info", 1);
 
     // Parameter
     // 1) Topic 
@@ -57,7 +58,8 @@ Object_Detection::Object_Detection(ros::NodeHandle* nodeHandle) : counter(0), pr
     boost::shared_ptr<message_filters::Synchronizer<Sync>> sync;
     sync.reset(new message_filters::Synchronizer<Sync>(Sync(10), lidar_sub, camera_sub, yolo_sub));
     sync->registerCallback(boost::bind(&Object_Detection::Detection_Callback, this, _1, _2, _3));
-    ros::Subscriber sub = nh.subscribe("/Ego_topic", 1, &Object_Detection::Ego_Callback, this);
+    ros::Subscriber ego_sub = nh.subscribe("/Ego_topic", 1, &Object_Detection::Ego_Callback, this);
+    ros::Subscriber object_sub = nh.subscribe("/Object_topic", 1, &Object_Detection::Object_Callback, this);
 
     ROS_INFO("lidar_topic: %s", lidar_topic.c_str());
     ROS_INFO("camera_topic: %s", camera_topic.c_str());
@@ -84,6 +86,8 @@ Object_Detection::Object_Detection(ros::NodeHandle* nodeHandle) : counter(0), pr
     filter_range->addComparison(pcl::FieldComparison<pcl::PointXYZI>::ConstPtr(new pcl::FieldComparison<pcl::PointXYZI>("z", pcl::ComparisonOps::GT, zMinRange)));
 
     Object_Detection::read_projection_matrix();
+    
+    outFile.open("/home/a/output.txt");
 
     ros::spin();
 }
@@ -96,6 +100,14 @@ void Object_Detection::Ego_Callback(const morai_msgs::EgoVehicleStatus& ego_msg)
     double vel_x = ego_msg.velocity.x;
     double vel_y = ego_msg.velocity.y;
     current_vel = sqrt(pow(vel_x, 2) + pow(vel_y, 2));
+}
+
+void Object_Detection::Object_Callback(const morai_msgs::ObjectStatusList& object_msg){
+    if (object_msg.num_of_npcs == 1){
+        double vel_x = object_msg.npc_list[0].velocity.x;
+        double vel_y = object_msg.npc_list[0].velocity.y;
+        obj_current_vel = sqrt(pow(vel_x, 2) + pow(vel_y, 2));
+    }
 }
 
 void Object_Detection::Detection_Callback(const sensor_msgs::PointCloud2::ConstPtr& lidar_msg, 
@@ -164,6 +176,7 @@ void Object_Detection::convert_msg(const detect_msgs::Yolo_Objects::ConstPtr& yo
     visualization_msgs::MarkerArray text_array;
     std::vector<object_struct> object_struct_list;
     std_msgs::Int32 vel_msg;
+    std_msgs::String vel_info;
 
     // Add ID Text Marker
     for (int i = 0; i < counter; i++){
@@ -352,12 +365,22 @@ void Object_Detection::convert_msg(const detect_msgs::Yolo_Objects::ConstPtr& yo
         double pos = state[0];
         double vel = state[1] * 3.6; // Relative Velocity (kph)
 
-        if ((vel > max_vel + 1) || (vel < min_vel - 1)) {
-            vel = prev_vel;
+        if (vel > max_vel){
+            vel = max_vel;
         }
 
-        vel_msg.data = static_cast<int>(vel);
-        prev_vel = vel;
+        else if (vel < min_vel){
+            vel = min_vel;
+        }
+
+        int int_vel = static_cast<int>(vel);
+        int int_real_vel = static_cast<int>(obj_current_vel - current_vel * 3.6);
+        vel_msg.data = int_vel;
+        vel_info.data = "Pred: "+ std::to_string(int_vel) + "   " +  "Real: " + std::to_string(int_real_vel);
+        tracking_vel.publish(vel_msg);
+        tracking_info.publish(vel_info);
+
+        outFile << int_vel << " " << int_real_vel << std::endl;
         
         /*
         // Kalman Filter 2x1
@@ -400,7 +423,6 @@ void Object_Detection::convert_msg(const detect_msgs::Yolo_Objects::ConstPtr& yo
     // Publish Centeroid Info & Velocity
     tracking_id.publish(text_array);
     detection_msg.publish(object_array);
-    tracking_vel.publish(vel_msg);
 }
 
 // LiDAR-Camera Projection Matrix

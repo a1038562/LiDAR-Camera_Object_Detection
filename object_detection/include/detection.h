@@ -38,7 +38,12 @@
 #include <message_filters/sync_policies/approximate_time.h>
 
 #include <morai_msgs/EgoVehicleStatus.h>
+#include <morai_msgs/ObjectStatusList.h>
+#include <morai_msgs/ObjectStatus.h>
 #include <std_msgs/Int32.h>
+#include <std_msgs/String.h>
+
+#include <fstream>
 
 #include <kalman_filter.h>
 
@@ -65,6 +70,7 @@ private:
     ros::Publisher cloud_centeroid;
     ros::Publisher tracking_id;
     ros::Publisher tracking_vel;
+    ros::Publisher tracking_info;
     
     // ROS message Topic
     std::string lidar_topic, camera_topic, yolo_topic, frame_name;
@@ -98,6 +104,7 @@ private:
                            const sensor_msgs::Image::ConstPtr& camera_msg, 
                            const detect_msgs::Yolo_Objects::ConstPtr& yolo_msg);
     void Ego_Callback(const morai_msgs::EgoVehicleStatus& ego_msg);
+    void Object_Callback(const morai_msgs::ObjectStatusList& object_msg);
 
     pcl::PointCloud<pcl::PointXYZ>::Ptr ground_filter(pcl::PointCloud<pcl::PointXYZ> cloud);
     visualization_msgs::Marker create_text(int id, double x, double y, int counter);
@@ -105,6 +112,7 @@ private:
     int counter;
     double point_height;
     double current_vel;
+    double obj_current_vel;
 
     int bbox_width;
     double dist_thresh;
@@ -118,9 +126,10 @@ private:
     double q2; 
     double r;
 
-    double prev_vel;
     double max_vel;
     double min_vel;
+
+    std::ofstream outFile;
  
 public:
     Object_Detection(ros::NodeHandle* nodeHandle);
