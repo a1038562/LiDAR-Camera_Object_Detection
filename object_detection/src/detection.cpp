@@ -93,7 +93,7 @@ Object_Detection::Object_Detection(ros::NodeHandle* nodeHandle) : counter(0), bb
 }
 
 Object_Detection::~Object_Detection(){
-    ROS_INFO("finish detection");
+    ROS_INFO("Finish Detection");
 }
 
 void Object_Detection::Ego_Callback(const morai_msgs::EgoVehicleStatus& ego_msg){
@@ -404,7 +404,6 @@ void Object_Detection::convert_msg(const detect_msgs::Yolo_Objects::ConstPtr& yo
         }
         */
 
- 
         cv::circle(camera_image, cv::Point2d(u, v), 10, cv::Scalar(255, 0, 255), -1);
 
         visualization_msgs::Marker id_text = create_text(min_distance_id, centeroid_list_cv[i].x, centeroid_list_cv[i].y, counter);
