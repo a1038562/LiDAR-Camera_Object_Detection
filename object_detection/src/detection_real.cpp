@@ -1,7 +1,7 @@
 #include <detection.h>
 
-Object_Detection::Object_Detection(ros::NodeHandle* nodeHandle) : counter(0){
-    ROS_INFO("start detection");
+Object_Detection::Object_Detection(ros::NodeHandle* nodeHandle) : counter(0), bbox_width(30), dist_thresh(1.5){
+    ROS_INFO("Start Detection");
     nh = *nodeHandle;  
     
     // Publisher 
@@ -11,6 +11,7 @@ Object_Detection::Object_Detection(ros::NodeHandle* nodeHandle) : counter(0){
     cloud_cluster = nh.advertise<sensor_msgs::PointCloud2>("/cloud_cluster", 1); 
     cloud_centeroid = nh.advertise<sensor_msgs::PointCloud2>("/cloud_centeroid", 1); 
     tracking_id = nh.advertise<visualization_msgs::MarkerArray>("/tracking_id", 1);
+    tracking_vel = nh.advertise<std_msgs::Int32>("/tracking_vel", 1);
 
     // Parameter
     // 1) Topic 
@@ -31,6 +32,22 @@ Object_Detection::Object_Detection(ros::NodeHandle* nodeHandle) : counter(0){
     nh.param<double>("cluster_tolerance", cluster_tolerance, 1.0); 
     nh.param<int>("cluster_min", cluster_min, 4); 
     nh.param<int>("cluster_max", cluster_max, 100); 
+
+    // 4) Ground Filtering
+    nh.param<double>("point_height", point_height, -0.1);  
+
+    // 5) Kalman Filter
+    nh.param<double>("dt", dt, 10);  
+    nh.param<double>("p1", p1, 10);  
+    nh.param<double>("p2", p2, 10);  
+    nh.param<double>("q1", q1, 1);  
+    nh.param<double>("q2", q2, 1);  
+    nh.param<double>("r", r, 1); 
+    kf.init(dt, p1, p2, q1, q2, r);
+
+    // 6) Velocity Estimation
+    nh.param<double>("max_vel", max_vel, 20);  
+    nh.param<double>("min_vel", min_vel, -5);  
 
     // Subscriber 
     message_filters::Subscriber<sensor_msgs::PointCloud2> lidar_sub(nh, lidar_topic, 10);
@@ -67,14 +84,14 @@ Object_Detection::Object_Detection(ros::NodeHandle* nodeHandle) : counter(0){
 }
 
 Object_Detection::~Object_Detection(){
-    ROS_INFO("finish detection");
+    ROS_INFO("Finish Detection");
 }
 
 void Object_Detection::Detection_Callback(const sensor_msgs::PointCloud2::ConstPtr& lidar_msg, 
                                          const sensor_msgs::Image::ConstPtr& camera_msg, 
                                          const detect_msgs::Yolo_Objects::ConstPtr& yolo_msg){
     
-    ROS_INFO("Callback...");
+    //ROS_INFO("Callback...");
 
     camera_image = cv_bridge::toCvCopy(camera_msg, sensor_msgs::image_encodings::BGR8)->image;
     pcl::PointCloud<pcl::PointXYZI>::Ptr pointcloud(new pcl::PointCloud<pcl::PointXYZI>());
@@ -135,6 +152,7 @@ void Object_Detection::convert_msg(const detect_msgs::Yolo_Objects::ConstPtr& yo
     detect_msgs::detected_array object_array;
     visualization_msgs::MarkerArray text_array;
     std::vector<object_struct> object_struct_list;
+    std_msgs::Int32 vel_msg;
 
     // Add ID Text Marker
     for (int i = 0; i < counter; i++){
@@ -159,7 +177,7 @@ void Object_Detection::convert_msg(const detect_msgs::Yolo_Objects::ConstPtr& yo
    
         object_struct object_info = {999};
         
-        if (x_max  - x_min < 30) continue; // Shorter than min width
+        if (x_max  - x_min < bbox_width) continue; // Shorter than min width
         cv::rectangle(camera_image, cv::Rect(cv::Point2d(x_min, y_min), cv::Point2d(x_max, y_max)), cv::Scalar(255, 255, 255), 2);
         cv::rectangle(camera_image, cv::Rect(cv::Point2d (x_min + 1, y_min + 1), cv::Point2d(x_max -1 , y_max - 1)), cv::Scalar(255, 255, 0), 1);
 
@@ -179,7 +197,7 @@ void Object_Detection::convert_msg(const detect_msgs::Yolo_Objects::ConstPtr& yo
             if (u < x_min + 10 || u > x_max - 10|| v < y_min + 10 || v > y_max - 10) continue; // Points in bbox
 
             double dist = distance_list[j];
-            if (abs(min_distance - dist) > 1.5) continue; // Points around min distance
+            if (abs(min_distance - dist) > dist_thresh) continue; // Points around min distance
 
             object_info.x = lidar_points[j].x;
             object_info.y = lidar_points[j].y;
@@ -292,7 +310,7 @@ void Object_Detection::convert_msg(const detect_msgs::Yolo_Objects::ConstPtr& yo
         cv::Point2d projected_centeroid = projected_centeroid_list[i];
         int u = projected_centeroid.x;
         int v = projected_centeroid.y;
-        double min_distance = 1e6;
+        double min_distance = 1e3;
         int min_distance_id = -1;
 
         for (int j = 0; j < object_struct_list.size(); j++){ // Points in 2D bbox
@@ -312,6 +330,28 @@ void Object_Detection::convert_msg(const detect_msgs::Yolo_Objects::ConstPtr& yo
                 min_distance_id = id;
             }
         }
+
+        double center_dist = pow(centeroid_list_cv[i].x, 2) + pow(centeroid_list_cv[i].y, 2);
+        
+        // Kalman Filter 1x1
+        Eigen::Matrix<double, 1, 1> measurement(center_dist); // Distance
+        kf.predict();
+        kf.update(measurement);
+        Eigen::Vector2d state = kf.getState();
+        double pos = state[0];
+        double vel = state[1] * 3.6; // Relative Velocity (kph)
+
+        if (vel > max_vel){
+            vel = max_vel;
+        }
+
+        else if (vel < min_vel){
+            vel = min_vel;
+        }
+
+        int int_vel = static_cast<int>(vel);
+        vel_msg.data = int_vel;
+        tracking_vel.publish(vel_msg);
 
         cv::circle(camera_image, cv::Point2d(u, v), 10, cv::Scalar(255, 0, 255), -1);
 
@@ -411,7 +451,7 @@ pcl::PointCloud<pcl::PointXYZ>::Ptr Object_Detection::ground_filter(pcl::PointCl
             if ((max[x][y] - min[x][y]) > height_thresh){
                 filtered->points[obstacle_count].x = -grid_offset + (x * per_cell + per_cell / 2.0);
                 filtered->points[obstacle_count].y = -grid_offset + (y * per_cell + per_cell / 2.0);
-                filtered->points[obstacle_count].z = -0.1; // height set
+                filtered->points[obstacle_count].z = point_height;
                 obstacle_count++;
             }
         }
